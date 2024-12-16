@@ -1,5 +1,6 @@
 import os
 import cv2
+import shutil
 
 class DataLoader:
     def __init__(self, train_path='dataset/train/', val_path='dataset/val/'):
@@ -29,11 +30,18 @@ class DataLoader:
 
     def __load(self, data_path):
         '''Loads the training / validation data using the given path'''
-        os.makedirs(f'preprocessed/images_and_detections/{data_path}/', exist_ok=True)
         
+        images_and_detections_path = f'{data_path}/images_and_detections/'
+        images_and_masks_path = f'{data_path}/images_and_masks/'
+        if os.path.exists(images_and_detections_path):
+            shutil.rmtree(images_and_detections_path)
+        if os.path.exists(images_and_masks_path):
+            shutil.rmtree(images_and_masks_path)
+        os.makedirs(images_and_detections_path)
+        os.makedirs(images_and_masks_path)
+
         data = {}
         for patient in os.listdir(os.path.join(data_path, 'images/')):
-            os.makedirs(subject_output_folder, exist_ok=True)
             for image_name in os.listdir(os.path.join(data_path, 'images/', patient)):
                 image_path = os.path.join(data_path, 'images/', patient, image_name)
                 img = cv2.imread(image_path, cv2.IMREAD_GRAYSCALE)
@@ -42,12 +50,20 @@ class DataLoader:
                 scan_ID = patient + '_' + scan_ID
                 data[scan_ID] = [img]
 
+                copied_image_path = os.path.join(f'{data_path}/images_and_detections/', f'{scan_ID}.png')
+                shutil.copy(image_path, copied_image_path)
+                copied_image_path = os.path.join(f'{data_path}/images_and_masks/', f'image_{scan_ID}.png')
+                shutil.copy(image_path, copied_image_path)                
+
             for mask_name in os.listdir(os.path.join(data_path, 'masks/', patient)):
                 mask_path = os.path.join(data_path, 'masks/', patient, mask_name)
                 scan_ID, extension = os.path.splitext(mask_name)
                 scan_ID = patient + '_' + scan_ID
                 mask = cv2.imread(mask_path, cv2.IMREAD_GRAYSCALE)
                 data[scan_ID].append(mask)
+
+                copied_mask_path = os.path.join(f'{data_path}/images_and_masks/', f'mask_{scan_ID}.png')
+                shutil.copy(mask_path, copied_mask_path)    
 
             for detection_name in os.listdir(os.path.join(data_path, 'detections/', patient)):
                 detection_path = os.path.join(data_path, 'detections/', patient, detection_name)
@@ -56,6 +72,11 @@ class DataLoader:
                 scan_ID, extension = os.path.splitext(detection_name)
                 scan_ID = patient + '_' + scan_ID
                 data[scan_ID].append(detections)
+
+                detections = [f'1,{det[0]},{det[1]},{det[2]},{det[3]}' for det in detections]
+                copied_detection_path = os.path.join(f'{data_path}/images_and_detections/', f'{scan_ID}.txt')
+                with open(copied_detection_path, 'w') as file:
+                    file.write('\n'.join(detections))
 
         for scan in data.values():
             if len(scan) == 2:
