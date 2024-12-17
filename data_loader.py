@@ -5,7 +5,7 @@ from zipfile import ZipFile
 
 class DataLoader:
     def __init__(self, dataset_path='LungTumorDetectionAndSegmentation.zip', loading_destination='dataset/'):
-        self.dataset_path
+        self.dataset_path = dataset_path
         self.loading_destination = loading_destination        
         self.train_path = os.path.join(loading_destination, 'train')
         self.val_path = os.path.join(loading_destination, 'val')
@@ -17,6 +17,7 @@ class DataLoader:
         And each value is a list of [Image, Mask, detections_list]
         where detections list may include 0 or more lists
         of 4 numbers eachlocating the bounding box'''
+        # Extract the original dataset directory
         if os.path.exists(self.loading_destination):
             shutil.rmtree(self.loading_destination)
         os.makedirs(self.loading_destination)
@@ -26,24 +27,22 @@ class DataLoader:
         self.image_height, self.image_width = cv2.imread("dataset/train/images/Subject_0/0.png", cv2.IMREAD_UNCHANGED).shape
         print(f"The dataset consists of {self.image_height} x {self.image_width} grayscale images")
 
-        print('[ Loading Training Data   ]  ', end='')
-        train_data = self.__load(self.train_path)
-        train_cancer_num, train_healthy_num = self.__count_cancer(train_data)
-        print(f'Loaded [{len(train_data)}] Scans ({train_cancer_num} Cancer + {train_healthy_num} Healthy)')
+        print('[Loading Training Data  ]  ', end='')
+        self.__organize(self.train_path)
+        self.__report_loading(self.train_path)
+        self.__delete_old_directories(self.train_path)
 
-        print('[ Loading Validation Data ]  ', end='')
-        val_data = self.__load(self.val_path)
-        val_cancer_num,val_healthy_num = self.__count_cancer(val_data)
-        print(f'Loaded [{len(val_data)}] Scans ({val_cancer_num} Cancer + {val_healthy_num} Healthy)')
-        return train_data, val_data
+        print('[Loading Validation Data]  ', end='')
+        self.__organize(self.val_path)
+        self.__report_loading(self.val_path)
+        self.__delete_old_directories(self.val_path)
 
-    def __load(self, data_path):
-        '''Loads the training / validation data using the given path'''
+    def __organize(self, data_path):
+        '''Organizes the data in data_path'''
         all_images_path = f'{data_path}/all_images/'
         all_masks_path = f'{data_path}/all_masks/'
         images_and_detections_path = f'{data_path}/images_and_detections/'
-        images_and_masks_path = f'{data_path}/images_and_masks/'
-        for path in [all_images_path, all_masks_path, images_and_detections_path, images_and_masks_path]:
+        for path in [all_images_path, all_masks_path, images_and_detections_path]:
             if os.path.exists(path):
                 shutil.rmtree(path)
             os.makedirs(path)
@@ -58,31 +57,26 @@ class DataLoader:
                 shutil.copy(image_path, image_copy_path)
                 image_copy_path = os.path.join(images_and_detections_path, f'{scan_ID}.png')
                 shutil.copy(image_path, image_copy_path)
-                image_copy_path = os.path.join(images_and_masks_path, f'{scan_ID}_image.png')
 
             for mask_name in os.listdir(os.path.join(data_path, 'masks/', patient)):
                 mask_path = os.path.join(data_path, 'masks/', patient, mask_name)
                 scan_ID, extension = os.path.splitext(mask_name)
                 scan_ID = patient + '_' + scan_ID
 
-                copied_mask_path = os.path.join(all_masks_path, f'{scan_ID}.png')
-                shutil.copy(mask_path, copied_mask_path)
-                copied_mask_path = os.path.join(images_and_masks_path, f'{scan_ID}_mask.png')
+                mask_copy_path = os.path.join(all_masks_path, f'{scan_ID}.png')
+                shutil.copy(mask_path, mask_copy_path)
 
             for det_name in os.listdir(os.path.join(data_path, 'detections/', patient)):
                 detection_path = os.path.join(data_path, 'detections/', patient, det_name)
-                detections = self.__read_detections(detection_path)
+                self.__normalize_detections(detection_path)
 
                 scan_ID, extension = os.path.splitext(det_name)
                 scan_ID = patient + '_' + scan_ID
+                detection_copy_path = os.path.join(images_and_detections_path, f'{scan_ID}.txt')
+                shutil.copy(detection_path, detection_copy_path) 
 
-                copied_detection_path = os.path.join(images_and_detections_path, f'{scan_ID}.txt')
-                with open(copied_detection_path, 'w') as file:
-                    file.write('\n'.join(detections))
-        self.__delete_added_folders(data_path)
-
-    def __read_detections(self, path):
-        '''Reads cancer detections from a text file in path'''
+    def __normalize_detections(self, path):
+        '''Normalizes detections written in the file placed in path'''
         detections = []
         if not os.path.exists(path):
             print(f'Error: Reading a detection from a wrong path')
@@ -96,25 +90,24 @@ class DataLoader:
                 bbox_height = (ymax - ymin) / self.image_height
                 coordinates = [1, bbox_x_center, bbox_y_center, bbox_width, bbox_height]
                 coordinates = f'0 {bbox_x_center} {bbox_y_center} {bbox_width} {bbox_height}'
-                detections.append(tuple(coordinates))
-        return detections
+                detections.append(coordinates)
+            with open(path, 'w') as file:
+                file.write('\n'.join(detections))
 
-    def __count_cancer(self, data):
+    def __report_loading(self, data_path):
         '''Counts the number of scans that do/doesn't have
-        cancer detections in the dictionary "data"'''
-        cancer_sum = 0
-        healthy_sum = 0
-        for image, scan, detections in data.values():
-            if len(detections) == 0:
-                healthy_sum += 1
-            else:
-                cancer_sum += 1
-        return cancer_sum, healthy_sum
-
-    def __delete_added_folders(self, data_path):
+        cancer detections data_path"'''
+        file_names = os.listdir(f'{data_path}/images_and_detections')
+        image_names = [os.path.splitext(name)[0] for name in file_names if name.endswith('png')]
+        detections_names = [os.path.splitext(name)[0] for name in file_names if name.endswith('txt')]
+        healthy_num = len(image_names) - len(detections_names)
+        cancer_num = len(image_names) - healthy_num
+        print(f'Loaded [{len(image_names)}] Scans ({cancer_num} Cancer + {healthy_num} Healthy)')
+        
+    def __delete_old_directories(self, data_path):
         '''Removes the original dataset folders that are not needed anymore'''
         shutil.rmtree(os.path.join(data_path, 'images'))
         shutil.rmtree(os.path.join(data_path, 'masks'))
         shutil.rmtree(os.path.join(data_path, 'detections'))
-        os.rename('all_images', 'images')
-        os.rename('all_masks', 'masks')
+        os.rename(os.path.join(data_path, 'all_images/'), os.path.join(data_path, 'images'))
+        os.rename(os.path.join(data_path, 'all_masks/'), os.path.join(data_path, 'masks'))
