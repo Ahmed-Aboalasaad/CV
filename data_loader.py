@@ -1,6 +1,7 @@
 import os
 import cv2
 import shutil
+import random
 from zipfile import ZipFile
 
 class DataLoader:
@@ -79,7 +80,7 @@ class DataLoader:
         '''Normalizes detections written in the file placed in path'''
         detections = []
         if not os.path.exists(path):
-            print(f'Error: Reading a detection from a wrong path')
+            print(f'Error: Reading a detection from a non-existent path')
             return ()
         with open(path, 'r') as file:
             for line in file:
@@ -111,3 +112,44 @@ class DataLoader:
         shutil.rmtree(os.path.join(data_path, 'detections'))
         os.rename(os.path.join(data_path, 'all_images/'), os.path.join(data_path, 'images'))
         os.rename(os.path.join(data_path, 'all_masks/'), os.path.join(data_path, 'masks'))
+
+    def random_scans(self, num_scans):
+        '''Retrurns a list of length num_scans of tuples
+        of images and their corresponding detections.
+        A detection will be returned as [xmin, ymin, xmax, ymax]'''
+        def read_detections(dets_path):
+            '''Reads the detections of one image whose detections file
+            is placed dets_path.'''
+            if not os.path.exists(dets_path):
+                return []
+            detections = []
+            with open(dets_path, 'r') as file:
+                for line in file:
+                    det = [float(num.strip()) for num in line.split(' ')]
+                    class_id, bbox_x_center, bbox_y_center, bbox_width, bbox_height = det
+                    xmin = int(bbox_x_center * self.image_width - bbox_width
+                                * self.image_width / 2)
+                    ymin = int(bbox_y_center * self.image_height - bbox_height
+                                * self.image_height / 2) 
+                    xmax = int(bbox_x_center * self.image_width + bbox_width
+                                * self.image_width / 2)
+                    ymax = int(bbox_y_center * self.image_height + bbox_height
+                                * self.image_height / 2)
+                    detections.append([xmin, ymin, xmax, ymax])
+            return detections
+        
+        images_path = os.path.join(self.train_path, 'images/')
+        image_names = random.sample(os.listdir(images_path), num_scans)
+        random_images = []
+        for name in image_names:
+            img = cv2.imread(os.path.join(images_path, name), cv2.IMREAD_GRAYSCALE)
+            random_images.append(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
+        
+        detectinos_path = os.path.join(self.train_path, 'images_and_detections/')
+        random_detections = []
+        for name in image_names:
+            scanID = os.path.splitext(name)[0]
+            det_path = os.path.join(detectinos_path, f'{scanID}.txt')
+            random_detections.append(read_detections(det_path))
+        
+        return [(img, dets) for img, dets in zip(random_images, random_detections)]
