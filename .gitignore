@@ -1,2 +1,4 @@
-/dataset/*
+/datasets/*
 __pycahce__/*
+*_config
+runs/*

@@ -1,0 +1,5 @@
+
+train: train/images_and_detections
+val: val/images_and_detections
+nc: 1
+names: ['tumor']

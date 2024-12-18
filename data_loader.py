@@ -5,7 +5,7 @@ import random
 from zipfile import ZipFile
 
 class DataLoader:
-    def __init__(self, dataset_path='LungTumorDetectionAndSegmentation.zip', loading_destination='dataset/'):
+    def __init__(self, dataset_path='dataset.zip', loading_destination='dataset/'):
         self.dataset_path = dataset_path
         self.loading_destination = loading_destination        
         self.train_path = os.path.join(loading_destination, 'train')
@@ -19,13 +19,14 @@ class DataLoader:
         where detections list may include 0 or more lists
         of 4 numbers eachlocating the bounding box'''
         # Extract the original dataset directory
-        if os.path.exists(self.loading_destination):
-            shutil.rmtree(self.loading_destination)
-        os.makedirs(self.loading_destination)
+        if os.path.normpath(self.loading_destination) != '.':
+            if os.path.exists(self.loading_destination):
+                shutil.rmtree(self.loading_destination)
+            os.makedirs(self.loading_destination)
         with ZipFile(self.dataset_path, 'r') as zip_ref:
             zip_ref.extractall(self.loading_destination)
         
-        self.image_height, self.image_width = cv2.imread("dataset/train/images/Subject_0/0.png", cv2.IMREAD_UNCHANGED).shape
+        self.image_height, self.image_width = cv2.imread(f"{self.train_path}/images/Subject_0/0.png", cv2.IMREAD_UNCHANGED).shape
         print(f"The dataset consists of {self.image_height} x {self.image_width} grayscale images")
 
         print('[Loading Training Data  ]  ', end='')
@@ -117,7 +118,23 @@ class DataLoader:
         '''Retrurns a list of length num_scans of tuples
         of images and their corresponding detections.
         A detection will be returned as [xmin, ymin, xmax, ymax]'''
-        def read_detections(dets_path):
+        images_path = os.path.join(self.train_path, 'images/')
+        image_names = random.sample(os.listdir(images_path), num_scans)
+        random_images = []
+        for name in image_names:
+            img = cv2.imread(os.path.join(images_path, name), cv2.IMREAD_GRAYSCALE)
+            random_images.append(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
+        
+        detectinos_path = os.path.join(self.train_path, 'images_and_detections/')
+        random_detections = []
+        for name in image_names:
+            scanID = os.path.splitext(name)[0]
+            det_path = os.path.join(detectinos_path, f'{scanID}.txt')
+            random_detections.append(self.__read_detections(det_path))
+        
+        return [(img, dets) for img, dets in zip(random_images, random_detections)]
+
+    def __read_detections(self, dets_path):
             '''Reads the detections of one image whose detections file
             is placed dets_path.'''
             if not os.path.exists(dets_path):
@@ -137,19 +154,42 @@ class DataLoader:
                                 * self.image_height / 2)
                     detections.append([xmin, ymin, xmax, ymax])
             return detections
+
+    def generate_cropped_data(self, destination=''):
+        self.__generate_cropped_data(self.train_path)
+        self.__generate_cropped_data(self.val_path)
+
+    def __generate_cropped_data(self, data_path):
+        '''Crops the images & masks from images/ & masks/ located under dat_path,
+        which also has images_and_detections/ that is used to crop.'''
+        cropped_images_path = os.path.join(data_path, 'cropped_images/')
+        cropped_masks_path = os.path.join(data_path, 'cropped_masks/')
+        for path in [cropped_images_path, cropped_masks_path]:
+            if os.path.exists(path):
+                shutil.rmtree(path)
+            os.makedirs(path)
         
-        images_path = os.path.join(self.train_path, 'images/')
-        image_names = random.sample(os.listdir(images_path), num_scans)
-        random_images = []
-        for name in image_names:
-            img = cv2.imread(os.path.join(images_path, name), cv2.IMREAD_GRAYSCALE)
-            random_images.append(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
-        
-        detectinos_path = os.path.join(self.train_path, 'images_and_detections/')
-        random_detections = []
-        for name in image_names:
-            scanID = os.path.splitext(name)[0]
-            det_path = os.path.join(detectinos_path, f'{scanID}.txt')
-            random_detections.append(read_detections(det_path))
-        
-        return [(img, dets) for img, dets in zip(random_images, random_detections)]
+        for image_name in os.listdir(os.path.join(data_path, 'images/')):
+            scanID, extension = os.path.splitext(image_name)
+            det_path = os.path.join(data_path, 'images_and_detections/', f'{scanID}.txt')
+            if not os.path.exists(det_path):
+                continue
+            
+            image_path = os.path.join(data_path, 'images/', image_name)
+            mask_path = os.path.join(data_path, 'masks/', image_name)
+            image = cv2.imread(image_path, cv2.IMREAD_GRAYSCALE)
+            mask = cv2.imread(mask_path, cv2.IMREAD_GRAYSCALE)
+
+            detections = self.__read_detections(det_path)
+            for i, det in enumerate(detections):
+                xmin, ymin, xmax, ymax = det
+                cropped_image = image[ymin:ymax, xmin:xmax]
+                cropped_mask = mask[ymin:ymax, xmin:xmax]
+                
+                cropped_image = cv2.resize(cropped_image, (self.image_width, self.image_height))
+                cropped_mask = cv2.resize(cropped_mask, (self.image_width, self.image_height))
+                
+                cropped_img_dst = os.path.join(cropped_images_path, f"{scanID}_tumor{i+1}.png")
+                cropped_mask_dst = os.path.join(cropped_masks_path, f"{scanID}_tumor{i+1}.png")
+                cv2.imwrite(cropped_img_dst, cropped_image)
+                cv2.imwrite(cropped_mask_dst, cropped_mask)
