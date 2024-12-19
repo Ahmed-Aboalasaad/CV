@@ -6,7 +6,7 @@ import numpy as np
 from zipfile import ZipFile
 
 class DataLoader:
-    def __init__(self, dataset_path='dataset.zip', loading_destination='dataset/'):
+    def __init__(self, dataset_path='dataset.zip', loading_destination='datasets/'):
         self.dataset_path = dataset_path
         self.loading_destination = loading_destination        
         self.train_path = os.path.join(loading_destination, 'train')
@@ -27,18 +27,9 @@ class DataLoader:
         with ZipFile(self.dataset_path, 'r') as zip_ref:
             zip_ref.extractall(self.loading_destination)
         
+        # Read and Print the images shape
         self.image_height, self.image_width = cv2.imread(f"{self.train_path}/images/Subject_0/0.png", cv2.IMREAD_UNCHANGED).shape
-        print(f"The dataset consists of {self.image_height} x {self.image_width} grayscale images")
-
-        def report_loading(data_path):
-            '''Counts the number of scans that do/doesn't have
-            cancer detections data_path"'''
-            file_names = os.listdir(f'{data_path}/images_and_detections')
-            image_names = [os.path.splitext(name)[0] for name in file_names if name.endswith('png')]
-            detections_names = [os.path.splitext(name)[0] for name in file_names if name.endswith('txt')]
-            healthy_num = len(image_names) - len(detections_names)
-            cancer_num = len(image_names) - healthy_num
-            print(f'Loaded [{len(image_names)}] Scans ({cancer_num} Cancer + {healthy_num} Healthy)')
+        print(f"The dataset consists of {self.image_height} x {self.image_width} grayscale images\n")
 
         def delete_old_directories(data_path):
             '''Removes the original dataset folders that are not needed anymore'''
@@ -49,19 +40,52 @@ class DataLoader:
             os.rename(os.path.join(data_path, 'all_masks/'), os.path.join(data_path, 'masks'))
             os.rename(os.path.join(data_path, 'all_detections/'), os.path.join(data_path, 'detections'))
 
+        def report_loading(data_path):
+            '''Counts the number of scans that do/doesn't have cancer detections data_path"'''
+            images_count = len(os.listdir(f'{data_path}/images'))
+            detections_count = len(os.listdir(f'{data_path}/detections'))
+            healthy_count = images_count - detections_count
+            print(f'Loaded [{images_count}] Scans ({detections_count} Cancer + {healthy_count} Healthy)')
+            
+        # Load the basic Data
         print('[Loading Training Data  ]  ', end='')
         self.__organize(self.train_path)
-        report_loading(self.train_path)
         delete_old_directories(self.train_path)
+        report_loading(self.train_path)
 
         print('[Loading Validation Data]  ', end='')
         self.__organize(self.val_path)
-        report_loading(self.val_path)
         delete_old_directories(self.val_path)
+        report_loading(self.val_path)
+
+        self.__generate_cropped_data(self.train_path)
+        self.__generate_cropped_data(self.val_path)
+        print('\n[INFO]\nReorganized File Structure to:\n-images/\n-masks/\n-detections/\n' +
+              '-images_and_detections/\n-cropped_images/\n-cropped_masks')
+
+    def random_scans(self, num_scans):
+        '''Retrurns a list of length num_scans of tuples
+        of images and their corresponding detections.
+        A detection will be returned as [xmin, ymin, xmax, ymax]'''
+        images_path = os.path.join(self.train_path, 'images/')
+        image_names = random.sample(os.listdir(images_path), num_scans)
+        random_images = []
+        for name in image_names:
+            img = cv2.imread(os.path.join(images_path, name), cv2.IMREAD_GRAYSCALE)
+            random_images.append(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
+        
+        detectinos_path = os.path.join(self.train_path, 'images_and_detections/')
+        random_detections = []
+        for name in image_names:
+            scanID = os.path.splitext(name)[0]
+            det_path = os.path.join(detectinos_path, f'{scanID}.txt')
+            random_detections.append(self.__read_detections(det_path))
+        
+        return [(img, dets) for img, dets in zip(random_images, random_detections)]
 
     def __organize(self, data_path):
-        '''Organizes the data in data_path (train / val) into 3 folders:
-        all_images/ all_masks/ images_and_detections/
+        '''Organizes the data in data_path (train / val) into 4 folders:
+        all_images/ all_masks/ all_detections/ images_and_detections/
         Placing all of them under data_path'''
         all_images_path = f'{data_path}/all_images/'
         all_masks_path = f'{data_path}/all_masks/'
@@ -121,26 +145,6 @@ class DataLoader:
             with open(path, 'w') as file:
                 file.write('\n'.join(detections))
 
-    def random_scans(self, num_scans):
-        '''Retrurns a list of length num_scans of tuples
-        of images and their corresponding detections.
-        A detection will be returned as [xmin, ymin, xmax, ymax]'''
-        images_path = os.path.join(self.train_path, 'images/')
-        image_names = random.sample(os.listdir(images_path), num_scans)
-        random_images = []
-        for name in image_names:
-            img = cv2.imread(os.path.join(images_path, name), cv2.IMREAD_GRAYSCALE)
-            random_images.append(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
-        
-        detectinos_path = os.path.join(self.train_path, 'images_and_detections/')
-        random_detections = []
-        for name in image_names:
-            scanID = os.path.splitext(name)[0]
-            det_path = os.path.join(detectinos_path, f'{scanID}.txt')
-            random_detections.append(self.__read_detections(det_path))
-        
-        return [(img, dets) for img, dets in zip(random_images, random_detections)]
-
     def __read_detections(self, dets_path, yolo_normalization=False):
         '''Reads the detections of one image whose detections file is placed dets_path.
         This text file should include 5 whitespace-separated numbers normalized for yolo:
@@ -164,7 +168,7 @@ class DataLoader:
         file.close()
         return detections
 
-    def generate_cropped_data(self, destination=''):
+    def __generate_cropped_data(self, destination=''):
         self.__generate_cropped_data(self.train_path)
         self.__generate_cropped_data(self.val_path)
 
@@ -203,7 +207,7 @@ class DataLoader:
                 cv2.imwrite(cropped_img_dst, cropped_image)
                 cv2.imwrite(cropped_mask_dst, cropped_mask)
 
-    def rebuild_masks(self, cropped_masks_path, detections_path, destination):
+    def __rebuild_masks(self, cropped_masks_path, detections_path, destination):
         def rebuild_mask(cropped_mask_path, detection, canvas):
             '''Reconstrcuts the original mask from the zoomed-in cropped mask located at "cropped_mask_path".
             Detection is a list of 4 number normalized for yolo : [box_xcenter, box_ycenter, box_width, box_height]
