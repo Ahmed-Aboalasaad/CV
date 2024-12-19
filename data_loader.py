@@ -2,6 +2,7 @@ import os
 import cv2
 import shutil
 import random
+import numpy as np
 from zipfile import ZipFile
 
 class DataLoader:
@@ -40,7 +41,9 @@ class DataLoader:
         self.__delete_old_directories(self.val_path)
 
     def __organize(self, data_path):
-        '''Organizes the data in data_path'''
+        '''Organizes the data in data_path (train / val) into 3 folders:
+        all_images/ all_masks/ images_and_detections/
+        Placing all of them under data_path'''
         all_images_path = f'{data_path}/all_images/'
         all_masks_path = f'{data_path}/all_masks/'
         images_and_detections_path = f'{data_path}/images_and_detections/'
@@ -78,7 +81,8 @@ class DataLoader:
                 shutil.copy(detection_path, detection_copy_path) 
 
     def __normalize_detections(self, path):
-        '''Normalizes detections written in the file placed in path'''
+        '''Normalizes detections written in the file placed in path for yolo
+        to be on this format: [classID, bbox_x_center, bbox_y_center, bbox_width, bbox_height]'''
         detections = []
         if not os.path.exists(path):
             print(f'Error: Reading a detection from a non-existent path')
@@ -90,7 +94,6 @@ class DataLoader:
                 bbox_y_center = (ymin + ymax) / 2 / self.image_height
                 bbox_width = (xmax - xmin) / self.image_width
                 bbox_height = (ymax - ymin) / self.image_height
-                coordinates = [1, bbox_x_center, bbox_y_center, bbox_width, bbox_height]
                 coordinates = f'0 {bbox_x_center} {bbox_y_center} {bbox_width} {bbox_height}'
                 detections.append(coordinates)
             with open(path, 'w') as file:
@@ -134,26 +137,28 @@ class DataLoader:
         
         return [(img, dets) for img, dets in zip(random_images, random_detections)]
 
-    def __read_detections(self, dets_path):
-            '''Reads the detections of one image whose detections file
-            is placed dets_path.'''
-            if not os.path.exists(dets_path):
-                return []
-            detections = []
-            with open(dets_path, 'r') as file:
-                for line in file:
-                    det = [float(num.strip()) for num in line.split(' ')]
-                    class_id, bbox_x_center, bbox_y_center, bbox_width, bbox_height = det
-                    xmin = int(bbox_x_center * self.image_width - bbox_width
-                                * self.image_width / 2)
-                    ymin = int(bbox_y_center * self.image_height - bbox_height
-                                * self.image_height / 2) 
-                    xmax = int(bbox_x_center * self.image_width + bbox_width
-                                * self.image_width / 2)
-                    ymax = int(bbox_y_center * self.image_height + bbox_height
-                                * self.image_height / 2)
-                    detections.append([xmin, ymin, xmax, ymax])
-            return detections
+    def __read_detections(self, dets_path, unnormalize=True):
+        '''Reads the detections of one image whose detections file is placed dets_path.
+        This text file should include 5 whitespace-separated numbers normalized for yolo:
+        [class_id, bbox_x_center, bbox_y_center, bbox_width, bbox_height]
+        To convert them back to [xmin, ymin, xmax, ymax], raise the unnormalize flag'''
+        if not os.path.exists(dets_path):
+            return []
+        detections = []
+        file = open(dets_path, 'r')
+        for line in file:
+            det = [float(num.strip()) for num in line.split(' ')]
+            if not unnormalize:
+                detections.append(det[1:])
+                continue
+            class_id, bbox_x_center, bbox_y_center, bbox_width, bbox_height = det
+            xmin = int(bbox_x_center * self.image_width - bbox_width * self.image_width/2)
+            ymin = int(bbox_y_center * self.image_height - bbox_height * self.image_height/2) 
+            xmax = int(bbox_x_center * self.image_width + bbox_width * self.image_width/2)
+            ymax = int(bbox_y_center * self.image_height + bbox_height * self.image_height/2)
+            detections.append([xmin, ymin, xmax, ymax])
+        file.close()
+        return detections
 
     def generate_cropped_data(self, destination=''):
         self.__generate_cropped_data(self.train_path)
@@ -193,3 +198,41 @@ class DataLoader:
                 cropped_mask_dst = os.path.join(cropped_masks_path, f"{scanID}_tumor{i+1}.png")
                 cv2.imwrite(cropped_img_dst, cropped_image)
                 cv2.imwrite(cropped_mask_dst, cropped_mask)
+
+    def reconstruct_masks(self, cropped_masks_path, detections_path, destination):
+        def reconstruct_mask(big_box_path, detection):
+            big_box = cv2.imread(big_box_path, cv2.IMREAD_GRAYSCALE)
+
+            # These 4 numbers are related to the small original box
+            box_xcenter, box_ycenter, box_width, box_height = detection
+            box_xcenter = int(box_xcenter * self.image_width)
+            box_ycenter = int(box_ycenter * self.image_height)
+            box_width = int(box_width * self.image_width)
+            box_height = int(box_height * self.image_height)
+
+            small_box = cv2.resize(big_box, (box_width, box_height))
+            xmin = box_xcenter - box_width // 2
+            ymin = box_ycenter - box_height // 2
+            
+            mask = np.zeros((self.image_height, self.image_width))
+            mask[ymin:ymin+box_height, xmin:xmin+box_width] = small_box
+            return mask
+        
+        if not os.path.exists(cropped_masks_path):
+            print(f'[Error] non-existent mask reconstruction destination')
+        if os.path.exists(destination):
+            shutil.rmtree(destination)
+        os.makedirs(destination)
+        
+        for cropped_mask_name in os.listdir(cropped_masks_path):
+            scanID, tumor_num = cropped_mask_name.split('_tumor')
+            tumor_num = tumor_num.split('.')[0]
+            
+            dets_path = os.path.join(detections_path, f'{scanID}.txt')
+            dets = self.__read_detections(dets_path)
+
+            cropped_mask_path = os.path.join(cropped_masks_path, cropped_mask_name)
+            reconstructed_mask = reconstruct_mask(cropped_mask_path, dets)
+            with open(os.path.join(destination, croped), 'w') as file:
+                file.write('\n'.join(detections))
+
