@@ -30,15 +30,34 @@ class DataLoader:
         self.image_height, self.image_width = cv2.imread(f"{self.train_path}/images/Subject_0/0.png", cv2.IMREAD_UNCHANGED).shape
         print(f"The dataset consists of {self.image_height} x {self.image_width} grayscale images")
 
+        def report_loading(data_path):
+            '''Counts the number of scans that do/doesn't have
+            cancer detections data_path"'''
+            file_names = os.listdir(f'{data_path}/images_and_detections')
+            image_names = [os.path.splitext(name)[0] for name in file_names if name.endswith('png')]
+            detections_names = [os.path.splitext(name)[0] for name in file_names if name.endswith('txt')]
+            healthy_num = len(image_names) - len(detections_names)
+            cancer_num = len(image_names) - healthy_num
+            print(f'Loaded [{len(image_names)}] Scans ({cancer_num} Cancer + {healthy_num} Healthy)')
+
+        def delete_old_directories(data_path):
+            '''Removes the original dataset folders that are not needed anymore'''
+            shutil.rmtree(os.path.join(data_path, 'images'))
+            shutil.rmtree(os.path.join(data_path, 'masks'))
+            shutil.rmtree(os.path.join(data_path, 'detections'))
+            os.rename(os.path.join(data_path, 'all_images/'), os.path.join(data_path, 'images'))
+            os.rename(os.path.join(data_path, 'all_masks/'), os.path.join(data_path, 'masks'))
+            os.rename(os.path.join(data_path, 'all_detections/'), os.path.join(data_path, 'detections'))
+
         print('[Loading Training Data  ]  ', end='')
         self.__organize(self.train_path)
-        self.__report_loading(self.train_path)
-        self.__delete_old_directories(self.train_path)
+        report_loading(self.train_path)
+        delete_old_directories(self.train_path)
 
         print('[Loading Validation Data]  ', end='')
         self.__organize(self.val_path)
-        self.__report_loading(self.val_path)
-        self.__delete_old_directories(self.val_path)
+        report_loading(self.val_path)
+        delete_old_directories(self.val_path)
 
     def __organize(self, data_path):
         '''Organizes the data in data_path (train / val) into 3 folders:
@@ -46,8 +65,9 @@ class DataLoader:
         Placing all of them under data_path'''
         all_images_path = f'{data_path}/all_images/'
         all_masks_path = f'{data_path}/all_masks/'
+        all_detections_path = f'{data_path}/all_detections/'
         images_and_detections_path = f'{data_path}/images_and_detections/'
-        for path in [all_images_path, all_masks_path, images_and_detections_path]:
+        for path in [all_images_path, all_masks_path, all_detections_path, images_and_detections_path]:
             if os.path.exists(path):
                 shutil.rmtree(path)
             os.makedirs(path)
@@ -78,7 +98,9 @@ class DataLoader:
                 scan_ID, extension = os.path.splitext(det_name)
                 scan_ID = patient + '_' + scan_ID
                 detection_copy_path = os.path.join(images_and_detections_path, f'{scan_ID}.txt')
-                shutil.copy(detection_path, detection_copy_path) 
+                shutil.copy(detection_path, detection_copy_path)
+                detection_copy_path = os.path.join(all_detections_path, f'{scan_ID}.txt')
+                shutil.copy(detection_path, detection_copy_path)
 
     def __normalize_detections(self, path):
         '''Normalizes detections written in the file placed in path for yolo
@@ -98,24 +120,6 @@ class DataLoader:
                 detections.append(coordinates)
             with open(path, 'w') as file:
                 file.write('\n'.join(detections))
-
-    def __report_loading(self, data_path):
-        '''Counts the number of scans that do/doesn't have
-        cancer detections data_path"'''
-        file_names = os.listdir(f'{data_path}/images_and_detections')
-        image_names = [os.path.splitext(name)[0] for name in file_names if name.endswith('png')]
-        detections_names = [os.path.splitext(name)[0] for name in file_names if name.endswith('txt')]
-        healthy_num = len(image_names) - len(detections_names)
-        cancer_num = len(image_names) - healthy_num
-        print(f'Loaded [{len(image_names)}] Scans ({cancer_num} Cancer + {healthy_num} Healthy)')
-        
-    def __delete_old_directories(self, data_path):
-        '''Removes the original dataset folders that are not needed anymore'''
-        shutil.rmtree(os.path.join(data_path, 'images'))
-        shutil.rmtree(os.path.join(data_path, 'masks'))
-        shutil.rmtree(os.path.join(data_path, 'detections'))
-        os.rename(os.path.join(data_path, 'all_images/'), os.path.join(data_path, 'images'))
-        os.rename(os.path.join(data_path, 'all_masks/'), os.path.join(data_path, 'masks'))
 
     def random_scans(self, num_scans):
         '''Retrurns a list of length num_scans of tuples
@@ -137,7 +141,7 @@ class DataLoader:
         
         return [(img, dets) for img, dets in zip(random_images, random_detections)]
 
-    def __read_detections(self, dets_path, unnormalize=True):
+    def __read_detections(self, dets_path, yolo_normalization=False):
         '''Reads the detections of one image whose detections file is placed dets_path.
         This text file should include 5 whitespace-separated numbers normalized for yolo:
         [class_id, bbox_x_center, bbox_y_center, bbox_width, bbox_height]
@@ -148,7 +152,7 @@ class DataLoader:
         file = open(dets_path, 'r')
         for line in file:
             det = [float(num.strip()) for num in line.split(' ')]
-            if not unnormalize:
+            if yolo_normalization:
                 detections.append(det[1:])
                 continue
             class_id, bbox_x_center, bbox_y_center, bbox_width, bbox_height = det
@@ -199,9 +203,13 @@ class DataLoader:
                 cv2.imwrite(cropped_img_dst, cropped_image)
                 cv2.imwrite(cropped_mask_dst, cropped_mask)
 
-    def reconstruct_masks(self, cropped_masks_path, detections_path, destination):
-        def reconstruct_mask(big_box_path, detection):
-            big_box = cv2.imread(big_box_path, cv2.IMREAD_GRAYSCALE)
+    def rebuild_masks(self, cropped_masks_path, detections_path, destination):
+        def rebuild_mask(cropped_mask_path, detection, canvas):
+            '''Reconstrcuts the original mask from the zoomed-in cropped mask located at "cropped_mask_path".
+            Detection is a list of 4 number normalized for yolo : [box_xcenter, box_ycenter, box_width, box_height]
+            Using "detection", it resizees this cropped mask to the original size
+            and places it on the given canvas. If no canvas was given, a blank one is created by defualt.'''
+            big_box = cv2.imread(cropped_mask_path, cv2.IMREAD_GRAYSCALE)
 
             # These 4 numbers are related to the small original box
             box_xcenter, box_ycenter, box_width, box_height = detection
@@ -213,10 +221,9 @@ class DataLoader:
             small_box = cv2.resize(big_box, (box_width, box_height))
             xmin = box_xcenter - box_width // 2
             ymin = box_ycenter - box_height // 2
-            
-            mask = np.zeros((self.image_height, self.image_width))
-            mask[ymin:ymin+box_height, xmin:xmin+box_width] = small_box
-            return mask
+
+            canvas[ymin:ymin+box_height, xmin:xmin+box_width] = small_box
+            return canvas
         
         if not os.path.exists(cropped_masks_path):
             print(f'[Error] non-existent mask reconstruction destination')
@@ -224,15 +231,15 @@ class DataLoader:
             shutil.rmtree(destination)
         os.makedirs(destination)
         
-        for cropped_mask_name in os.listdir(cropped_masks_path):
-            scanID, tumor_num = cropped_mask_name.split('_tumor')
-            tumor_num = tumor_num.split('.')[0]
-            
-            dets_path = os.path.join(detections_path, f'{scanID}.txt')
-            dets = self.__read_detections(dets_path)
-
-            cropped_mask_path = os.path.join(cropped_masks_path, cropped_mask_name)
-            reconstructed_mask = reconstruct_mask(cropped_mask_path, dets)
-            with open(os.path.join(destination, croped), 'w') as file:
-                file.write('\n'.join(detections))
-
+        for dets_name in os.listdir(detections_path):
+            if not dets_name.endswith('.txt'):
+                continue
+            scanID, extension = dets_name.split('.')
+            dets_path = os.path.join(detections_path, dets_name)
+            dets = self.__read_detections(dets_path, yolo_normalization=True)
+            canvas = np.zeros((self.image_height, self.image_width))
+            for i, det in enumerate(dets):
+                cropped_mask_name = f'{scanID}_tumor{i+1}.png'
+                cropped_mask_path = os.path.join(cropped_masks_path, cropped_mask_name)
+                rebuilt_mask = rebuild_mask(cropped_mask_path, det, canvas)
+            cv2.imwrite(os.path.join(destination, f'{scanID}.png'), rebuilt_mask)
