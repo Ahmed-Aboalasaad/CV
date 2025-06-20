@@ -1,2 +1,1 @@
-# CV
-Lung Tumor Detection and Segmentation
+# Computer Vision Project: Lung Tumor Detection and Segmentation
